@@ -1,0 +1,17 @@
+{
+  "name": "gpt-oss-120b-max",
+  "version": "1.0.0",
+  "description": "Ollama server mimic that exposes gpt-oss-120b and gpt-oss-20b through Ollama Turbo subscription for blazing fast AI in tools like JetBrains",
+  "type": "module",
+  "scripts": {
+    "start": "bun run openai-server.ts",
+    "dev": "bun run --watch openai-server.ts"
+  },
+  "dependencies": {
+    "ollama": "^0.5.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  }
+}
