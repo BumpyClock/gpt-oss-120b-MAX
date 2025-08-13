@@ -10,7 +10,7 @@ and that's `gpt-oss-20b`...
 
 ## The Problem
 
-Ollama's new Turbo subscription provides access to powerful remote models like `gpt-oss-120b` and `gpt-oss-20b`, but most IDEs and AI tools expect OpenAI's API format. This server solves that by:
+The current tools does not support Ollama headers to send the bearer and access to powerful remote models like `gpt-oss-120b` and `gpt-oss-20b`, but most IDEs and AI tools accepts OpenAI's API format. This server solves that by:
 
 - **Providing OpenAI-compatible API** that tools recognize
 - **Exposing remote Turbo models** through familiar OpenAI format
@@ -37,11 +37,13 @@ and then edit the `OLLAMA_API_KEY` var env with your key.
 4. **Start the server:**
 ```bash
 # Start the OpenAI-compatible server
-bun run openai
+bun run start-ollama-turbo
 
 # Development with auto-reload
-bun run openai:dev
+bun run dev
 ```
+
+For RooCode/Kilocode `bun run start` also starts qdrant locally for code embedding / indexing
 
 ## Environment Variables
 
@@ -49,56 +51,15 @@ bun run openai:dev
 - `OLLAMA_HOST` - Ollama Turbo host (default: https://ollama.com) - ⚠️ changing this will disable Turbo mode
 - `OPENAI_PORT` - Server port (default: 3304)
 
-## Final result?
-
-Yeah, you're not dreaming, this video is `1x` 😄
-
-https://github.com/user-attachments/assets/aed9ecb2-95e3-4a64-a6ed-6bc1a7eafb07
-
-But still a systematic error occurs... Almost there.
-
-And way better than the non-existing ChatGPT API that charges the same 20$/month 😄
-
-## Available Models
-
-This server exposes the following Ollama Turbo models via OpenAI API:
-
-- **gpt-oss:120b** - Large model for complex tasks, code generation
-- **gpt-oss:20b** - Smaller model for quick responses, suggestions
-
-⚠️ Not supported yet:
-- Agentic features
-- Web browsing and tool capabilities
-
 ## IDE Integration
 
-### JetBrains AI
-
-1. **Start the server:** `bun run openai`
-2. **In JetBrains IDE:**
-   - Go to Settings → AI Assistant → Provider
-   - Select "OpenAI" as provider
-   - Set Base URL to: `http://localhost:3304/v1`
-   - Set API Key to: `any-key` (not required, but field must be filled)
-   - Click "Test Connection" ✅
-3. **Select models:**
-   - Core features: `gpt-oss:120b` (for code generation, commit messages)
-   - Instant helpers: `gpt-oss:20b` (for quick suggestions)
-
-![JetBrains AI](doc/gpt-oss-120b-MAX.webp)
-
-### VS Code with AI Extensions
+### VS Code, Cursor with AI Extensions or JetBrains AI
 Configure your AI extension to use:
 - Base URL: `http://localhost:3304/v1`
-- API Key: `any-key`
-
-### Cursor
-1. Go to Settings
-2. Find AI Provider settings
-3. Set Custom OpenAI API URL to: `http://localhost:3304/v1`
-4. Set API Key to: `any-key`
-
-
+- API Key: `any-key-does-not-matter`
+- **Select models:**
+   - `gpt-oss:120b`
+   - `gpt-oss:20b`
 
 ## API Usage Examples
 
@@ -132,7 +93,7 @@ curl -X POST http://localhost:3304/v1/chat/completions \
 
 Works with any tool that supports OpenAI API:
 - ✅ **JetBrains AI Assistant**
-- ✅ **VS Code AI Extensions**
+- ✅ **VS Code AI Extensions** (RooCode / Kilocode)
 - ✅ **Cursor IDE**
 - ✅ **Any OpenAI-compatible application**
 

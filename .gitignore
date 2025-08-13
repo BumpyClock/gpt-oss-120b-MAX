@@ -47,3 +47,4 @@ pocketbase
 logs/
 *.iml
 tsconfig.tsbuildinfo
+qdrant_storage/
