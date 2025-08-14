@@ -4,6 +4,7 @@
  */
 
 import { OLLAMA_HOST, OLLAMA_API_KEY, LOCAL_OLLAMA_HOST } from '../config';
+import { isRemoteModel } from '../ollama-utils';
 
 export interface OllamaClientOptions {
   timeout?: number;
@@ -126,7 +127,7 @@ export class OllamaClient {
    * Chat completion with automatic routing (local vs remote)
    */
   async chatCompletion(model: string, messages: any[], options: any = {}): Promise<Response> {
-    const isRemoteModel = ['gpt-oss:120b', 'gpt-oss:20b'].includes(model);
+    const useRemote = isRemoteModel(model);
     
     const requestBody = {
       model,
@@ -134,7 +135,7 @@ export class OllamaClient {
       ...options
     };
 
-    if (isRemoteModel) {
+    if (useRemote) {
       return this.fetchRemote('/api/chat', {
         method: 'POST',
         body: JSON.stringify(requestBody)

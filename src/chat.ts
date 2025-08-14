@@ -1,8 +1,7 @@
 import { validateAuth } from './auth';
 import { createErrorResponse, generateId, generateRequestId } from './errors';
 import { logChatRequest, logChatResponse, logError, logStreamingChunk, logStreamingComplete, logStreamingStart } from './logger';
-import { ModelService } from './services/model-service';
-import { OllamaClient } from './clients/ollama-client';
+import { getModelService, getOllamaClient } from './services/container';
 import { createApiHeaders } from './utils/headers';
 import type {
   OllamaChatRequest,
@@ -13,10 +12,6 @@ import type {
 } from './types';
 import { convertToOllamaMessages } from './utils';
 import { validateModel, validateParameters, validateRequest } from './validation';
-
-// Service instances
-const modelService = new ModelService();
-const ollamaClient = new OllamaClient();
 
 export const handleChatCompletions = async (req: Request): Promise<Response> => {
   const authValidation = validateAuth(req);
@@ -45,6 +40,7 @@ export const handleChatCompletions = async (req: Request): Promise<Response> => 
     const requestValidation = validateRequest(body);
     if (requestValidation) return requestValidation;
 
+    const modelService = getModelService();
     const modelsResponse = await modelService.getOpenAIModels();
     const availableModels = modelsResponse.data.map((m) => m.id);
     
@@ -121,6 +117,7 @@ export const handleNonStreamingChat = async (
   responseHeaders: Record<string, string>
 ): Promise<Response> => {
   try {
+    const ollamaClient = getOllamaClient();
     const response = await ollamaClient.chatCompletion(model, ollamaRequest.messages, {
       stream: false,
       ...ollamaRequest
@@ -297,6 +294,7 @@ export const handleStreamingChat = async (
       };
 
       try {
+        const ollamaClient = getOllamaClient();
         const response = await ollamaClient.chatCompletion(model, ollamaRequest.messages, {
           stream: true,
           ...ollamaRequest

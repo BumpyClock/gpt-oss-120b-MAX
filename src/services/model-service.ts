@@ -4,7 +4,7 @@
  */
 
 import { OllamaClient } from '../clients/ollama-client';
-import { REMOTE_MODELS } from '../config';
+import { isRemoteModel } from '../ollama-utils';
 import type { OllamaModel, OllamaTagsResponse, ModelsList, ModelData } from '../types';
 
 export class ModelService {
@@ -70,7 +70,7 @@ export class ModelService {
       
       // Only include models that are in our REMOTE_MODELS list
       return allRemoteModels.filter((model: OllamaModel) => 
-        REMOTE_MODELS.includes(model.name)
+        isRemoteModel(model.name)
       );
     } catch (error) {
       console.warn('Remote Ollama not available:', (error as Error).message);
@@ -88,7 +88,7 @@ export class ModelService {
       id: model.name,
       object: 'model' as const,
       created: Math.floor(new Date(model.modified_at || Date.now()).getTime() / 1000),
-      owned_by: this.isRemoteModel(model.name) ? 'ollama-turbo' : 'local',
+      owned_by: isRemoteModel(model.name) ? 'ollama-turbo' : 'local',
       permission: [],
       root: model.name,
       parent: null
@@ -108,12 +108,6 @@ export class ModelService {
     return models.some(model => model.name === modelName);
   }
 
-  /**
-   * Check if a model should use remote routing
-   */
-  isRemoteModel(modelName: string): boolean {
-    return REMOTE_MODELS.includes(modelName);
-  }
 
   /**
    * Remove duplicate models, preferring local over remote
@@ -123,8 +117,8 @@ export class ModelService {
     const uniqueModels: OllamaModel[] = [];
 
     // Process local models first (they take priority)
-    const localModels = models.filter(model => !this.isRemoteModel(model.name));
-    const remoteModels = models.filter(model => this.isRemoteModel(model.name));
+    const localModels = models.filter(model => !isRemoteModel(model.name));
+    const remoteModels = models.filter(model => isRemoteModel(model.name));
 
     for (const model of [...localModels, ...remoteModels]) {
       if (!seen.has(model.name)) {

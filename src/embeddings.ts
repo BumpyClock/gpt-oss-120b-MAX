@@ -1,5 +1,5 @@
 import { createErrorResponse } from './errors';
-import { OllamaClient } from './clients/ollama-client';
+import { getOllamaClient } from './services/container';
 import { createApiHeaders } from './utils/headers';
 
 export interface OpenAIEmbeddingRequest {
@@ -39,9 +39,6 @@ function estimateTokens(text: string): number {
   // Rough estimate: ~4 characters per token
   return Math.ceil(text.length / 4);
 }
-
-// Service instance
-const ollamaClient = new OllamaClient();
 
 export async function handleEmbeddings(req: Request): Promise<Response> {
   const requestId = crypto.randomUUID();
@@ -95,6 +92,7 @@ export async function handleEmbeddings(req: Request): Promise<Response> {
 
       // Call Ollama embeddings API using client
       try {
+        const ollamaClient = getOllamaClient();
         const ollamaResult = await ollamaClient.generateEmbeddings(body.model, text);
 
         if (!ollamaResult.embedding || !Array.isArray(ollamaResult.embedding)) {

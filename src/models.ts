@@ -1,13 +1,11 @@
 import type { ModelsList } from './types';
 import { generateRequestId, createErrorResponse } from './errors';
 import { createApiHeaders } from './utils/headers';
-import { ModelService } from './services/model-service';
-
-// Single model service instance
-const modelService = new ModelService();
+import { getModelService } from './services/container';
 
 export const handleModelsInternal = async (): Promise<ModelsList> => {
   try {
+    const modelService = getModelService();
     return await modelService.getOpenAIModels();
   } catch (error) {
     console.error('Models error:', error);
