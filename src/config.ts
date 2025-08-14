@@ -22,6 +22,10 @@ export const loadEnvFile = () => {
 export const OLLAMA_API_KEY = process.env.OLLAMA_API_KEY;
 export const PORT = 3304;
 export const OLLAMA_HOST = 'https://ollama.com';
+export const LOCAL_OLLAMA_HOST = process.env.LOCAL_OLLAMA_HOST || 'http://localhost:11434';
+
+// Models available only on remote Ollama.com
+export const REMOTE_MODELS = ['gpt-oss:120b', 'gpt-oss:20b'];
 
 export const KNOWN_ENDPOINTS = [
   { method: 'POST', path: '/v1/chat/completions' },

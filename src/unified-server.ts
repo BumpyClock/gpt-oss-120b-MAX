@@ -1,10 +1,24 @@
 import { serve } from 'bun';
-import { loadEnvFile, OLLAMA_API_KEY, OLLAMA_HOST, LOCAL_OLLAMA_HOST, REMOTE_MODELS } from './config';
+import { handleChatCompletions } from './chat';
+import { KNOWN_ENDPOINTS, loadEnvFile, OLLAMA_API_KEY, PORT, OLLAMA_HOST, LOCAL_OLLAMA_HOST, REMOTE_MODELS } from './config';
+import { createErrorResponse, generateRequestId } from './errors';
+import { handleModels } from './models';
 
 loadEnvFile();
 
-const PROXY_PORT = 3305;
-const PROXY_VERSION = '1.0.0';
+console.log(`Debug: OLLAMA_API_KEY loaded: ${OLLAMA_API_KEY ? 'Yes' : 'No'}`);
+console.log(`Debug: OLLAMA_API_KEY length: ${OLLAMA_API_KEY?.length || 0}`);
+
+if (!OLLAMA_API_KEY) {
+  console.error('OLLAMA_API_KEY environment variable is required');
+  process.exit(1);
+}
+
+const UNIFIED_VERSION = '1.0.0';
+
+// ============================================================================
+// OLLAMA API TYPES AND INTERFACES
+// ============================================================================
 
 interface OllamaRequest {
   model?: string;
@@ -36,6 +50,10 @@ interface OllamaRunningResponse {
   models: OllamaModel[];
 }
 
+// ============================================================================
+// OLLAMA API HELPER FUNCTIONS
+// ============================================================================
+
 // Determine if a model should be routed to remote Ollama.com
 const isRemoteModel = (model: string): boolean => {
   return REMOTE_MODELS.includes(model);
@@ -60,7 +78,7 @@ const extractDigestFromPath = (pathname: string): string | null => {
 };
 
 // Forward request to either local or remote Ollama
-const forwardRequest = async (req: Request, targetHost: string, useAuth: boolean): Promise<Response> => {
+const forwardOllamaRequest = async (req: Request, targetHost: string, useAuth: boolean): Promise<Response> => {
   const url = new URL(req.url);
   const targetUrl = new URL(url.pathname + url.search, targetHost);
 
@@ -69,9 +87,12 @@ const forwardRequest = async (req: Request, targetHost: string, useAuth: boolean
   
   if (useAuth && OLLAMA_API_KEY) {
     headers.set('Authorization', `Bearer ${OLLAMA_API_KEY}`);
+    console.log(`[${new Date().toISOString()}] Adding auth header for remote request`);
+  } else if (useAuth && !OLLAMA_API_KEY) {
+    console.error('Remote routing requested but no OLLAMA_API_KEY found!');
   }
 
-  console.log(`[${new Date().toISOString()}] ${req.method} ${targetUrl.href} (${useAuth ? 'remote' : 'local'})`);
+  console.log(`[${new Date().toISOString()}] Ollama ${req.method} ${targetUrl.href} (${useAuth ? 'remote' : 'local'})`);
 
   try {
     const response = await fetch(targetUrl.href, {
@@ -79,6 +100,22 @@ const forwardRequest = async (req: Request, targetHost: string, useAuth: boolean
       headers,
       body: req.body,
     });
+
+    // Log response status for debugging
+    console.log(`[${new Date().toISOString()}] Response status: ${response.status} ${response.statusText}`);
+    
+    if (!response.ok && useAuth) {
+      // Log the response body for auth errors
+      const errorText = await response.text();
+      console.error(`[${new Date().toISOString()}] Remote auth error: ${errorText}`);
+      return new Response(JSON.stringify({
+        error: `Remote authentication failed: ${response.status} ${response.statusText}`,
+        details: errorText
+      }), {
+        status: response.status,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
 
     // Return response with original headers (but update host back)
     const responseHeaders = new Headers(response.headers);
@@ -222,7 +259,7 @@ const handleMergedPs = async (): Promise<Response> => {
 };
 
 // Handle version endpoint
-const handleVersion = async (): Promise<Response> => {
+const handleOllamaVersion = async (): Promise<Response> => {
   let localVersion = 'unknown';
   let remoteVersion = 'unknown';
   
@@ -255,11 +292,18 @@ const handleVersion = async (): Promise<Response> => {
   }
 
   return new Response(JSON.stringify({
-    version: PROXY_VERSION,
-    proxy: 'gpt-oss-120b-max-ollama-proxy',
+    version: UNIFIED_VERSION,
+    proxy: 'gpt-oss-120b-max-unified-server',
     local_ollama: localVersion,
     remote_ollama: remoteVersion,
+    supported_apis: ['OpenAI v1', 'Ollama'],
     supported_endpoints: [
+      // OpenAI endpoints
+      'POST /v1/chat/completions',
+      'GET /v1/models',
+      'POST /v1/completions',
+      'POST /v1/embeddings',
+      // Ollama endpoints
       'POST /api/generate',
       'POST /api/chat',
       'POST /api/embed',
@@ -281,75 +325,193 @@ const handleVersion = async (): Promise<Response> => {
   });
 };
 
+// ============================================================================
+// UNIFIED SERVER
+// ============================================================================
+
 const server = serve({
-  port: PROXY_PORT,
+  port: PORT,
+  idleTimeout: 255,
   async fetch(req) {
     const url = new URL(req.url);
-    
-    // Handle unified model listing
-    if (url.pathname === '/api/tags' && req.method === 'GET') {
-      return handleUnifiedTags();
+
+    // Handle CORS preflight for both APIs
+    if (req.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, DELETE, HEAD, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization, Organization',
+        },
+      });
     }
 
-    // Handle unified running models list
-    if (url.pathname === '/api/ps' && req.method === 'GET') {
-      return handleMergedPs();
-    }
+    console.log(`[${new Date().toISOString()}] ${req.method} ${url.pathname}`);
 
-    // Handle version endpoint
-    if (url.pathname === '/api/version' && req.method === 'GET') {
-      return handleVersion();
-    }
+    // ========================================================================
+    // OPENAI API ROUTES (/v1/*)
+    // ========================================================================
+    if (url.pathname.startsWith('/v1/')) {
+      console.log(`[${new Date().toISOString()}] OpenAI API: ${req.method} ${url.pathname}`);
 
-    // Handle blob endpoints (always local)
-    if (url.pathname.startsWith('/api/blobs/') && ['HEAD', 'POST'].includes(req.method)) {
-      const digest = extractDigestFromPath(url.pathname);
-      if (digest) {
-        return forwardRequest(req, LOCAL_OLLAMA_HOST, false);
-      } else {
-        return new Response('Invalid blob digest', { status: 400 });
+      if (url.pathname === '/v1/chat/completions' && req.method === 'POST') {
+        return handleChatCompletions(req);
       }
+
+      if (url.pathname === '/v1/models' && req.method === 'GET') {
+        return handleModels(req);
+      }
+
+      if (url.pathname === '/v1/completions' && req.method === 'POST') {
+        return createErrorResponse(
+          'The Completions API is deprecated. Please use /v1/chat/completions instead.',
+          'invalid_request_error',
+          400
+        );
+      }
+
+      if (url.pathname === '/v1/embeddings' && req.method === 'POST') {
+        return createErrorResponse(
+          'Embeddings are not supported by this proxy.',
+          'invalid_request_error',
+          400
+        );
+      }
+
+      // OpenAI API root
+      if (url.pathname === '/v1/' && req.method === 'GET') {
+        return new Response(JSON.stringify({
+          message: 'OpenAI-compatible API server',
+          version: '1.0.0',
+          endpoints: KNOWN_ENDPOINTS.map(e => `${e.method} ${e.path}`)
+        }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      // OpenAI API 404
+      return new Response(JSON.stringify({
+        error: {
+          message: 'Not found',
+          type: 'invalid_request_error'
+        },
+        endpoints: KNOWN_ENDPOINTS.map(e => `${e.method} ${e.path}`)
+      }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
 
-    // For requests that include a model, route based on model type
-    if (['POST'].includes(req.method) && 
-        ['/api/generate', '/api/chat', '/api/embed', '/api/embeddings', '/api/show'].includes(url.pathname)) {
-      
-      // Clone request to read body (since we'll need to forward it)
-      const clonedReq = req.clone();
-      const model = await extractModelFromRequest(clonedReq);
-      
-      if (model) {
-        if (isRemoteModel(model)) {
-          return forwardRequest(req, OLLAMA_HOST, true);
+    // ========================================================================
+    // OLLAMA API ROUTES (/api/*)
+    // ========================================================================
+    else if (url.pathname.startsWith('/api/')) {
+      console.log(`[${new Date().toISOString()}] Ollama API: ${req.method} ${url.pathname}`);
+
+      // Handle unified model listing
+      if (url.pathname === '/api/tags' && req.method === 'GET') {
+        return handleUnifiedTags();
+      }
+
+      // Handle unified running models list
+      if (url.pathname === '/api/ps' && req.method === 'GET') {
+        return handleMergedPs();
+      }
+
+      // Handle version endpoint
+      if (url.pathname === '/api/version' && req.method === 'GET') {
+        return handleOllamaVersion();
+      }
+
+      // Handle blob endpoints (always local)
+      if (url.pathname.startsWith('/api/blobs/') && ['HEAD', 'POST'].includes(req.method)) {
+        const digest = extractDigestFromPath(url.pathname);
+        if (digest) {
+          return forwardOllamaRequest(req, LOCAL_OLLAMA_HOST, false);
         } else {
-          return forwardRequest(req, LOCAL_OLLAMA_HOST, false);
+          return new Response('Invalid blob digest', { status: 400 });
         }
       }
-      // If no model specified, default to local
-      return forwardRequest(req, LOCAL_OLLAMA_HOST, false);
+
+      // For requests that include a model, route based on model type
+      if (['POST'].includes(req.method) && 
+          ['/api/generate', '/api/chat', '/api/embed', '/api/embeddings', '/api/show'].includes(url.pathname)) {
+        
+        // Clone request to read body (since we'll need to forward it)
+        const clonedReq = req.clone();
+        const model = await extractModelFromRequest(clonedReq);
+        
+        if (model) {
+          if (isRemoteModel(model)) {
+            return forwardOllamaRequest(req, OLLAMA_HOST, true);
+          } else {
+            return forwardOllamaRequest(req, LOCAL_OLLAMA_HOST, false);
+          }
+        }
+        // If no model specified, default to local
+        return forwardOllamaRequest(req, LOCAL_OLLAMA_HOST, false);
+      }
+
+      // For model management endpoints (always use local)
+      if (['POST', 'DELETE'].includes(req.method) && 
+          ['/api/pull', '/api/push', '/api/create', '/api/delete', '/api/copy'].includes(url.pathname)) {
+        return forwardOllamaRequest(req, LOCAL_OLLAMA_HOST, false);
+      }
+
+      // For other Ollama endpoints, use local by default
+      return forwardOllamaRequest(req, LOCAL_OLLAMA_HOST, false);
     }
 
-    // For model management endpoints (always use local)
-    if (['POST', 'DELETE'].includes(req.method) && 
-        ['/api/pull', '/api/push', '/api/create', '/api/delete', '/api/copy'].includes(url.pathname)) {
-      return forwardRequest(req, LOCAL_OLLAMA_HOST, false);
+    // ========================================================================
+    // ROOT AND OTHER ROUTES
+    // ========================================================================
+    
+    // Server root - show both APIs
+    if (url.pathname === '/' && req.method === 'GET') {
+      return new Response(JSON.stringify({
+        message: 'Unified OpenAI + Ollama API Server',
+        version: UNIFIED_VERSION,
+        apis: {
+          openai: {
+            base_url: '/v1',
+            description: 'OpenAI-compatible API',
+            endpoints: KNOWN_ENDPOINTS.map(e => `${e.method} ${e.path}`)
+          },
+          ollama: {
+            base_url: '/api',
+            description: 'Complete Ollama API',
+            models: {
+              local: `Available from ${LOCAL_OLLAMA_HOST}`,
+              remote: REMOTE_MODELS
+            }
+          }
+        }
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
 
-    // For other endpoints, use local by default
-    return forwardRequest(req, LOCAL_OLLAMA_HOST, false);
+    // 404 for everything else
+    return new Response(JSON.stringify({
+      error: 'Not found - try /v1/* for OpenAI API or /api/* for Ollama API'
+    }), {
+      status: 404,
+      headers: { 'Content-Type': 'application/json' }
+    });
   },
 });
 
-console.log(`🚀 Complete Ollama proxy running on http://localhost:${PROXY_PORT}`);
+console.log(`🚀 Unified OpenAI + Ollama server running on http://localhost:${PORT}`);
+console.log(`📍 OpenAI API: http://localhost:${PORT}/v1`);
+console.log(`📍 Ollama API: http://localhost:${PORT}/api`);
 console.log(`📍 Local Ollama: ${LOCAL_OLLAMA_HOST}`);
 console.log(`☁️  Remote Ollama: ${OLLAMA_HOST}`);
 console.log(`🎯 Remote models: ${REMOTE_MODELS.join(', ')}`);
 console.log(`🔑 Auth configured: ${OLLAMA_API_KEY ? 'Yes' : 'No'}`);
-console.log(`📋 Supported endpoints: 15 total (all Ollama API endpoints)`);
+console.log(`🎭 APIs: OpenAI v1 + Complete Ollama (20+ endpoints)`);
 
 process.on('SIGINT', () => {
-  console.log('\nShutting down complete proxy server...');
+  console.log('\nShutting down unified server...');
   server.stop();
   process.exit(0);
 });
