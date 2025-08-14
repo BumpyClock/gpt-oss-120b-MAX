@@ -1,8 +1,8 @@
-import { serve } from 'bun';
-import { loadEnvFile, PORT, OLLAMA_API_KEY, KNOWN_ENDPOINTS } from './config';
-import { handleChatCompletions } from './chat';
-import { handleModels } from './models';
-import { createErrorResponse } from './errors';
+import {serve} from 'bun';
+import {handleChatCompletions} from './chat';
+import {KNOWN_ENDPOINTS, loadEnvFile, OLLAMA_API_KEY, PORT} from './config';
+import {createErrorResponse} from './errors';
+import {handleModels} from './models';
 
 loadEnvFile();
 
@@ -77,23 +77,3 @@ const server = serve({
 });
 
 console.log('🚀 OpenAI-compatible v1 API server running on http://localhost:3304');
-console.log('');
-console.log('📡 SUPPORTED ENDPOINTS:');
-console.log('  ✅ POST /v1/chat/completions    (Full OpenAI compatibility)');
-console.log('  ✅ GET  /v1/models              (List available models)');
-console.log('  ❌ POST /v1/completions         (Deprecated - use chat/completions)');
-console.log('  ❌ POST /v1/embeddings          (Not supported)');
-console.log('');
-console.log('⚙️  SUPPORTED FEATURES:');
-console.log('  • Streaming & Non-streaming responses');
-console.log('  • Tool/Function calling support');
-console.log('  • JSON mode & Structured outputs');
-console.log('  • All OpenAI parameters (temperature, top_p, max_tokens, etc.)');
-console.log('  • Proper error handling with OpenAI-style envelopes');
-console.log('  • Rate limit headers & request IDs');
-console.log('');
-console.log('🔧 IDE CONFIGURATION (RooCode/KiloCode):');
-console.log('  Base URL: http://localhost:3304/v1');
-console.log('  API Key: any-valid-key (flexible validation)');
-console.log('');
-console.log('🔗 Proxying to Ollama with full OpenAI v1 API compatibility');

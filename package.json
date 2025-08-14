@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "lsof -ti:3304 | xargs kill -9 && bun run --watch openai-server.ts",
-    "start": "concurrently \"bun run start-ollama-turbo\" \"bun run start-qdrant\"",
-    "start-ollama-turbo": "lsof -ti:3304 | xargs kill -9 && bun run openai-server.ts",
+    "start": "concurrently -n \"turbo,openai,qdrant\" -c \"cyan.bold,green.bold,magenta.bold\" --prefix \"[{name}]\" \"bun run start-ollama-turbo\" \"bun run start-ollama-openai\" \"bun run start-qdrant\"",
+    "start-ollama-turbo": "lsof -ti:3305 | xargs kill -9 && bun run src/ollama-proxy.ts",
+    "start-ollama-openai": "lsof -ti:3304 | xargs kill -9 && bun run openai-server.ts",
     "start-qdrant": "docker run -p 6333:6333 -p 6334:6334 -v \"$(pwd)/qdrant_storage:/qdrant/storage:z\" qdrant/qdrant > /dev/null 2>&1"
   },
   "dependencies": {

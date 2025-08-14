@@ -1,16 +1,17 @@
-import type { 
-  OpenAIChatRequest, 
-  OpenAIChatResponse, 
-  OpenAIStreamChunk,
+import { validateAuth } from './auth';
+import { OLLAMA_API_KEY, OLLAMA_HOST } from './config';
+import { createErrorResponse, generateId, generateRequestId } from './errors';
+import { logChatRequest, logChatResponse, logError, logStreamingChunk, logStreamingComplete, logStreamingStart } from './logger';
+import { handleModelsInternal } from './models';
+import type {
   OllamaChatRequest,
-  OllamaOptions
+  OllamaOptions,
+  OpenAIChatRequest,
+  OpenAIChatResponse,
+  OpenAIStreamChunk
 } from './types';
 import { convertToOllamaMessages } from './utils';
-import { generateId, generateRequestId, createErrorResponse } from './errors';
-import { validateAuth } from './auth';
-import { validateRequest, validateParameters, validateModel } from './validation';
-import { handleModelsInternal } from './models';
-import { OLLAMA_HOST, OLLAMA_API_KEY } from './config';
+import { validateModel, validateParameters, validateRequest } from './validation';
 
 export const handleChatCompletions = async (req: Request): Promise<Response> => {
   const authValidation = validateAuth(req);
@@ -32,7 +33,18 @@ export const handleChatCompletions = async (req: Request): Promise<Response> => 
 
   try {
     const body: OpenAIChatRequest = await req.json();
-    console.log('Chat completions request:', { model: body.model, stream: body.stream, tools: !!body.tools });
+    
+    logChatRequest(requestId, {
+      model: body.model,
+      messages: body.messages,
+      stream: body.stream,
+      temperature: body.temperature,
+      max_tokens: body.max_tokens,
+      top_p: body.top_p,
+      tools: body.tools,
+      response_format: body.response_format,
+      user: body.user
+    });
 
     const requestValidation = validateRequest(body);
     if (requestValidation) return requestValidation;
@@ -96,7 +108,7 @@ export const handleChatCompletions = async (req: Request): Promise<Response> => 
     return handleNonStreamingChat(ollamaRequest, model, body, requestId, responseHeaders);
 
   } catch (error) {
-    console.error('Chat completions error:', error);
+    logError(requestId, error);
     return createErrorResponse(
       (error as Error).message || 'Internal server error',
       'internal_server_error',
@@ -165,11 +177,13 @@ export const handleNonStreamingChat = async (
       }
     };
 
+    logChatResponse(requestId, openaiResponse, false);
+
     return new Response(JSON.stringify(openaiResponse), {
       headers: responseHeaders
     });
   } catch (error) {
-    console.error('Non-streaming chat error:', error);
+    logError(requestId, error);
     return createErrorResponse(
       (error as Error).message || 'Internal server error',
       'internal_server_error',
@@ -186,6 +200,11 @@ export const handleStreamingChat = async (
 ): Promise<Response> => {
   const completionId = generateId();
   const timestamp = Math.floor(Date.now() / 1000);
+  let chunkCounter = 0;
+  let streamingContent = '';
+  let streamingStartTime = Date.now();
+  
+  logStreamingStart(requestId, model);
   
   const stream = new ReadableStream({
     async start(controller) {
@@ -198,6 +217,13 @@ export const handleStreamingChat = async (
           if (controllerClosed) {
             return;
           }
+          
+          // Track content for final summary
+          if (data.choices?.[0]?.delta?.content) {
+            streamingContent += data.choices[0].delta.content;
+          }
+          
+          logStreamingChunk(requestId, data, chunkCounter++);
           const chunk = `data: ${JSON.stringify(data)}\n\n`;
           controller.enqueue(encoder.encode(chunk));
         } catch (error) {
@@ -212,6 +238,18 @@ export const handleStreamingChat = async (
             controller.enqueue(encoder.encode('data: [DONE]\n\n'));
             controller.close();
             controllerClosed = true;
+            
+            const streamingSummary = {
+              completionId,
+              model,
+              totalChunks: chunkCounter,
+              contentLength: streamingContent.length,
+              fullContent: streamingContent,
+              durationMs: Date.now() - streamingStartTime,
+              finishReason: 'stop'
+            };
+            
+            logStreamingComplete(requestId, streamingSummary);
           }
         } catch (error) {
           controllerClosed = true;
@@ -331,6 +369,19 @@ export const handleStreamingChat = async (
                 };
                 writeChunk(backupFinalChunk);
                 hasFinished = true;
+                
+                const streamingSummary = {
+                  completionId,
+                  model,
+                  totalChunks: chunkCounter,
+                  contentLength: streamingContent.length,
+                  fullContent: streamingContent || 'Response received from model.',
+                  durationMs: Date.now() - streamingStartTime,
+                  finishReason: 'stop',
+                  fallback: true
+                };
+                
+                logStreamingComplete(requestId, streamingSummary);
                 safeClose();
               }
             }
@@ -457,7 +508,7 @@ export const handleStreamingChat = async (
           }
         }
       } catch (error) {
-        console.error('Streaming error:', error);
+        logError(requestId, error);
         if (!controllerClosed) {
           writeError((error as Error).message || 'Internal streaming error');
         }

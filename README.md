@@ -93,7 +93,7 @@ curl -X POST http://localhost:3304/v1/chat/completions \
 
 Works with any tool that supports OpenAI API:
 - ✅ **JetBrains AI Assistant**
-- ✅ **VS Code AI Extensions** (RooCode / Kilocode)
+- ✅ **VS Code AI Extensions** RooCode supports only openAI, Kilocode works with ollama proxy 3305
 - ✅ **Cursor IDE**
 - ✅ **Any OpenAI-compatible application**
 
