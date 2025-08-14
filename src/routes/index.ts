@@ -42,5 +42,6 @@ export async function routeRequest(req: Request): Promise<Response | null> {
   return null;
 }
 
-export { handleOpenAIRoute, handleOllamaRoute } from './openai-routes';
+export { handleOpenAIRoute } from './openai-routes';
+export { handleOllamaRoute } from './ollama-routes';
 export { shouldUseRemoteOllama } from './ollama-routes';

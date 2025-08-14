@@ -23,6 +23,7 @@ export const OLLAMA_API_KEY = process.env.OLLAMA_API_KEY;
 export const PORT = 3304;
 export const OLLAMA_HOST = 'https://ollama.com';
 export const LOCAL_OLLAMA_HOST = process.env.LOCAL_OLLAMA_HOST || 'http://localhost:11434';
+export const OLLAMA_STREAM = process.env.OLLAMA_STREAM !== 'false';
 
 // Models available only on remote Ollama.com
 export const REMOTE_MODELS = ['gpt-oss:120b', 'gpt-oss:20b'];

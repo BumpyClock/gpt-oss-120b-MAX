@@ -1,6 +1,6 @@
 import { serve } from 'bun';
 import { handleChatCompletions } from './chat';
-import { KNOWN_ENDPOINTS, loadEnvFile, OLLAMA_API_KEY, PORT, LOCAL_OLLAMA_HOST, OLLAMA_HOST, REMOTE_MODELS } from './config';
+import { KNOWN_ENDPOINTS, loadEnvFile, OLLAMA_API_KEY, PORT, LOCAL_OLLAMA_HOST, OLLAMA_HOST, REMOTE_MODELS, OLLAMA_STREAM } from './config';
 import { createErrorResponse, generateRequestId } from './errors';
 import { handleModels } from './models';
 import { handleEmbeddings } from './embeddings';
@@ -41,11 +41,31 @@ const forwardOllamaRequest = async (req: Request, targetHost: string, useAuth: b
 
   console.log(`[${new Date().toISOString()}] Ollama ${req.method} ${targetUrl.href} (${useAuth ? 'remote' : 'local'})`);
 
+  let requestBody: BodyInit | null = req.body;
+
+  // Override streaming for relevant endpoints when OLLAMA_STREAM is false
+  if (!OLLAMA_STREAM && req.method === 'POST' && 
+      ['/api/generate', '/api/chat', '/api/embed', '/api/embeddings'].includes(url.pathname)) {
+    try {
+      const bodyText = await req.text();
+      if (bodyText) {
+        const bodyObj = JSON.parse(bodyText);
+        bodyObj.stream = false;
+        requestBody = JSON.stringify(bodyObj);
+        headers.set('Content-Type', 'application/json');
+        console.log(`[${new Date().toISOString()}] OLLAMA_STREAM=false: Disabled streaming for ${url.pathname}`);
+      }
+    } catch (error) {
+      console.warn('Failed to parse request body for streaming override:', error);
+      requestBody = req.body;
+    }
+  }
+
   try {
     const response = await fetch(targetUrl.href, {
       method: req.method,
       headers,
-      body: req.body,
+      body: requestBody,
     });
 
     if (!response.ok && useAuth) {

@@ -12,6 +12,7 @@ import type {
 } from './types';
 import { convertToOllamaMessages } from './utils';
 import { validateModel, validateParameters, validateRequest } from './validation';
+import { OLLAMA_STREAM } from './config';
 
 export const handleChatCompletions = async (req: Request): Promise<Response> => {
   const authValidation = validateAuth(req);
@@ -69,6 +70,9 @@ export const handleChatCompletions = async (req: Request): Promise<Response> => 
       response_format
     } = body;
 
+    // Override streaming based on OLLAMA_STREAM environment variable
+    const effectiveStream = stream && OLLAMA_STREAM;
+
     const ollamaMessages = convertToOllamaMessages(messages);
     
     const options: OllamaOptions = {};
@@ -82,7 +86,7 @@ export const handleChatCompletions = async (req: Request): Promise<Response> => 
     const ollamaRequest: OllamaChatRequest = {
       model,
       messages: ollamaMessages,
-      stream
+      stream: effectiveStream
     };
 
     if (Object.keys(options).length > 0) {
@@ -93,7 +97,7 @@ export const handleChatCompletions = async (req: Request): Promise<Response> => 
       ollamaRequest.format = 'json';
     }
 
-    if (stream) {
+    if (effectiveStream) {
       return handleStreamingChat(ollamaRequest, model, body, requestId);
     }
 
