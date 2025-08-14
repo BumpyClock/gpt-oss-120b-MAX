@@ -191,3 +191,34 @@ export interface ModelsList {
   data: ModelData[]; 
 }
 
+export interface OllamaRequest {
+  model?: string;
+}
+
+export interface OllamaModel {
+  name: string;
+  model?: string;
+  modified_at?: string;
+  size?: number;
+  digest?: string;
+  details?: {
+    parent_model?: string;
+    format?: string;
+    family?: string;
+    families?: string[];
+    parameter_size?: string;
+    quantization_level?: string;
+  };
+  expires_at?: string;
+  size_vram?: number;
+  _source?: 'local' | 'remote';
+}
+
+export interface OllamaTagsResponse {
+  models: OllamaModel[];
+}
+
+export interface OllamaRunningResponse {
+  models: OllamaModel[];
+}
+

@@ -1,8 +1,9 @@
 import { validateAuth } from './auth';
-import { OLLAMA_API_KEY, OLLAMA_HOST } from './config';
 import { createErrorResponse, generateId, generateRequestId } from './errors';
 import { logChatRequest, logChatResponse, logError, logStreamingChunk, logStreamingComplete, logStreamingStart } from './logger';
-import { handleModelsInternal } from './models';
+import { ModelService } from './services/model-service';
+import { OllamaClient } from './clients/ollama-client';
+import { createApiHeaders } from './utils/headers';
 import type {
   OllamaChatRequest,
   OllamaOptions,
@@ -13,6 +14,10 @@ import type {
 import { convertToOllamaMessages } from './utils';
 import { validateModel, validateParameters, validateRequest } from './validation';
 
+// Service instances
+const modelService = new ModelService();
+const ollamaClient = new OllamaClient();
+
 export const handleChatCompletions = async (req: Request): Promise<Response> => {
   const authValidation = validateAuth(req);
   if (!authValidation.valid) {
@@ -20,16 +25,7 @@ export const handleChatCompletions = async (req: Request): Promise<Response> => 
   }
 
   const requestId = generateRequestId();
-  const responseHeaders = {
-    'Content-Type': 'application/json',
-    'x-request-id': requestId,
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, Organization',
-    'x-ratelimit-limit-requests': '10000',
-    'x-ratelimit-remaining-requests': '9999',
-    'x-ratelimit-reset-requests': new Date(Date.now() + 60000).toISOString(),
-  };
+  const responseHeaders = createApiHeaders(requestId);
 
   try {
     const body: OpenAIChatRequest = await req.json();
@@ -49,7 +45,7 @@ export const handleChatCompletions = async (req: Request): Promise<Response> => 
     const requestValidation = validateRequest(body);
     if (requestValidation) return requestValidation;
 
-    const modelsResponse = await handleModelsInternal();
+    const modelsResponse = await modelService.getOpenAIModels();
     const availableModels = modelsResponse.data.map((m) => m.id);
     
     if (!validateModel(body.model, availableModels)) {
@@ -125,13 +121,9 @@ export const handleNonStreamingChat = async (
   responseHeaders: Record<string, string>
 ): Promise<Response> => {
   try {
-    const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OLLAMA_API_KEY}`,
-      },
-      body: JSON.stringify(ollamaRequest),
+    const response = await ollamaClient.chatCompletion(model, ollamaRequest.messages, {
+      stream: false,
+      ...ollamaRequest
     });
 
     if (!response.ok) {
@@ -305,13 +297,9 @@ export const handleStreamingChat = async (
       };
 
       try {
-        const response = await fetch(`${OLLAMA_HOST}/api/chat`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${OLLAMA_API_KEY}`,
-          },
-          body: JSON.stringify(ollamaRequest),
+        const response = await ollamaClient.chatCompletion(model, ollamaRequest.messages, {
+          stream: true,
+          ...ollamaRequest
         });
 
         if (!response.ok) {

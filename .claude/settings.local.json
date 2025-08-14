@@ -3,7 +3,10 @@
     "allow": [
       "WebFetch(domain:github.com)",
       "Bash(gh repo fork:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "WebFetch(domain:platform.openai.com)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

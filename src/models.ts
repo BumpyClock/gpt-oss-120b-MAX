@@ -1,36 +1,14 @@
-import type { ModelsList, OllamaTagResponse } from './types';
+import type { ModelsList } from './types';
 import { generateRequestId, createErrorResponse } from './errors';
-import { OLLAMA_HOST, OLLAMA_API_KEY } from './config';
+import { createApiHeaders } from './utils/headers';
+import { ModelService } from './services/model-service';
+
+// Single model service instance
+const modelService = new ModelService();
 
 export const handleModelsInternal = async (): Promise<ModelsList> => {
   try {
-    const response = await fetch(`${OLLAMA_HOST}/api/tags`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${OLLAMA_API_KEY}`,
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`Ollama request failed: ${response.status} ${response.statusText}`);
-    }
-
-    const ollamaResponse: OllamaTagResponse = await response.json();
-
-    const models = ollamaResponse.models?.map((model) => ({
-      id: model.name,
-      object: 'model' as const,
-      created: Math.floor(new Date(model.modified_at || Date.now()).getTime() / 1000),
-      owned_by: 'ollama',
-      permission: [],
-      root: model.name,
-      parent: null
-    })) || [];
-
-    return {
-      object: 'list',
-      data: models
-    };
+    return await modelService.getOpenAIModels();
   } catch (error) {
     console.error('Models error:', error);
     throw error;
@@ -39,21 +17,11 @@ export const handleModelsInternal = async (): Promise<ModelsList> => {
 
 export const handleModels = async (req: Request): Promise<Response> => {
   const requestId = generateRequestId();
-  const responseHeaders = {
-    'Content-Type': 'application/json',
-    'x-request-id': requestId,
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, Organization',
-    'x-ratelimit-limit-requests': '10000',
-    'x-ratelimit-remaining-requests': '9999',
-    'x-ratelimit-reset-requests': new Date(Date.now() + 60000).toISOString(),
-  };
 
   try {
     const modelsData = await handleModelsInternal();
     return new Response(JSON.stringify(modelsData), {
-      headers: responseHeaders
+      headers: createApiHeaders(requestId)
     });
   } catch (error) {
     console.error('Models error:', error);

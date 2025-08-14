@@ -1,13 +1,20 @@
 import { serve } from 'bun';
 import { handleChatCompletions } from './chat';
-import { KNOWN_ENDPOINTS, loadEnvFile, OLLAMA_API_KEY, PORT, OLLAMA_HOST, LOCAL_OLLAMA_HOST, REMOTE_MODELS } from './config';
+import { KNOWN_ENDPOINTS, loadEnvFile, OLLAMA_API_KEY, PORT, LOCAL_OLLAMA_HOST, OLLAMA_HOST, REMOTE_MODELS } from './config';
 import { createErrorResponse, generateRequestId } from './errors';
 import { handleModels } from './models';
+import { handleEmbeddings } from './embeddings';
+import { createCorsHeaders } from './utils/headers';
+import { OllamaClient } from './clients/ollama-client';
+import { ModelService } from './services/model-service';
+import { isRemoteModel, extractModelFromRequest, extractDigestFromPath } from './ollama-utils';
+import type { OllamaModel } from './types';
 
 loadEnvFile();
 
-console.log(`Debug: OLLAMA_API_KEY loaded: ${OLLAMA_API_KEY ? 'Yes' : 'No'}`);
-console.log(`Debug: OLLAMA_API_KEY length: ${OLLAMA_API_KEY?.length || 0}`);
+// Service instances
+const ollamaClient = new OllamaClient();
+const modelService = new ModelService();
 
 if (!OLLAMA_API_KEY) {
   console.error('OLLAMA_API_KEY environment variable is required');
@@ -17,65 +24,8 @@ if (!OLLAMA_API_KEY) {
 const UNIFIED_VERSION = '1.0.0';
 
 // ============================================================================
-// OLLAMA API TYPES AND INTERFACES
-// ============================================================================
-
-interface OllamaRequest {
-  model?: string;
-}
-
-interface OllamaModel {
-  name: string;
-  model?: string;
-  modified_at?: string;
-  size?: number;
-  digest?: string;
-  details?: {
-    parent_model?: string;
-    format?: string;
-    family?: string;
-    families?: string[];
-    parameter_size?: string;
-    quantization_level?: string;
-  };
-  expires_at?: string;
-  size_vram?: number;
-}
-
-interface OllamaTagsResponse {
-  models: OllamaModel[];
-}
-
-interface OllamaRunningResponse {
-  models: OllamaModel[];
-}
-
-// ============================================================================
 // OLLAMA API HELPER FUNCTIONS
 // ============================================================================
-
-// Determine if a model should be routed to remote Ollama.com
-const isRemoteModel = (model: string): boolean => {
-  return REMOTE_MODELS.includes(model);
-};
-
-// Extract model from request body
-const extractModelFromRequest = async (req: Request): Promise<string | null> => {
-  if (!['POST', 'DELETE'].includes(req.method)) return null;
-  
-  try {
-    const body = await req.json() as OllamaRequest;
-    return body.model || null;
-  } catch {
-    return null;
-  }
-};
-
-// Extract digest from blob URL path
-const extractDigestFromPath = (pathname: string): string | null => {
-  const match = pathname.match(/^\/api\/blobs\/(.+)$/);
-  return match ? match[1] : null;
-};
 
 // Forward request to either local or remote Ollama
 const forwardOllamaRequest = async (req: Request, targetHost: string, useAuth: boolean): Promise<Response> => {
@@ -87,9 +37,6 @@ const forwardOllamaRequest = async (req: Request, targetHost: string, useAuth: b
   
   if (useAuth && OLLAMA_API_KEY) {
     headers.set('Authorization', `Bearer ${OLLAMA_API_KEY}`);
-    console.log(`[${new Date().toISOString()}] Adding auth header for remote request`);
-  } else if (useAuth && !OLLAMA_API_KEY) {
-    console.error('Remote routing requested but no OLLAMA_API_KEY found!');
   }
 
   console.log(`[${new Date().toISOString()}] Ollama ${req.method} ${targetUrl.href} (${useAuth ? 'remote' : 'local'})`);
@@ -101,13 +48,8 @@ const forwardOllamaRequest = async (req: Request, targetHost: string, useAuth: b
       body: req.body,
     });
 
-    // Log response status for debugging
-    console.log(`[${new Date().toISOString()}] Response status: ${response.status} ${response.statusText}`);
-    
     if (!response.ok && useAuth) {
-      // Log the response body for auth errors
       const errorText = await response.text();
-      console.error(`[${new Date().toISOString()}] Remote auth error: ${errorText}`);
       return new Response(JSON.stringify({
         error: `Remote authentication failed: ${response.status} ${response.statusText}`,
         details: errorText
@@ -139,123 +81,40 @@ const forwardOllamaRequest = async (req: Request, targetHost: string, useAuth: b
 
 // Handle unified model listing (/api/tags)
 const handleUnifiedTags = async (): Promise<Response> => {
-  const models: OllamaModel[] = [];
-  
-  // Fetch local models
   try {
-    console.log(`[${new Date().toISOString()}] Fetching local models from ${LOCAL_OLLAMA_HOST}`);
-    const localResponse = await fetch(`${LOCAL_OLLAMA_HOST}/api/tags`);
-    if (localResponse.ok) {
-      const localTags: OllamaTagsResponse = await localResponse.json();
-      models.push(...localTags.models);
-      console.log(`Found ${localTags.models.length} local models`);
-    } else {
-      console.warn('Local Ollama not available or returned error:', localResponse.status);
-    }
+    const models = await modelService.getUnifiedModels();
+    return new Response(JSON.stringify({ models }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
   } catch (error) {
-    console.warn('Failed to fetch local models:', (error as Error).message);
+    console.error('Failed to get unified tags:', error);
+    return new Response(JSON.stringify({ 
+      error: 'Failed to fetch models',
+      models: [] 
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
-
-  // Fetch remote models (only if API key is available)
-  if (OLLAMA_API_KEY) {
-    try {
-      console.log(`[${new Date().toISOString()}] Fetching remote models from ${OLLAMA_HOST}`);
-      const remoteResponse = await fetch(`${OLLAMA_HOST}/api/tags`, {
-        headers: {
-          'Authorization': `Bearer ${OLLAMA_API_KEY}`,
-        },
-      });
-      if (remoteResponse.ok) {
-        const remoteTags: OllamaTagsResponse = await remoteResponse.json();
-        // Only include models that are in our REMOTE_MODELS list
-        const filteredRemoteModels = remoteTags.models.filter(model => 
-          REMOTE_MODELS.includes(model.name)
-        );
-        models.push(...filteredRemoteModels);
-        console.log(`Found ${filteredRemoteModels.length} remote models`);
-      } else {
-        console.warn('Remote Ollama returned error:', remoteResponse.status);
-      }
-    } catch (error) {
-      console.warn('Failed to fetch remote models:', (error as Error).message);
-    }
-  } else {
-    console.warn('No OLLAMA_API_KEY provided, skipping remote models');
-  }
-
-  // Remove duplicates (prefer local over remote if same name)
-  const uniqueModels = models.reduce((acc: OllamaModel[], current) => {
-    const existing = acc.find(model => model.name === current.name);
-    if (!existing) {
-      acc.push(current);
-    }
-    return acc;
-  }, []);
-
-  console.log(`Returning ${uniqueModels.length} unified models`);
-  
-  return new Response(JSON.stringify({ models: uniqueModels }), {
-    headers: { 'Content-Type': 'application/json' }
-  });
 };
 
 // Handle unified running models list (/api/ps)
 const handleMergedPs = async (): Promise<Response> => {
-  const models: OllamaModel[] = [];
-  
-  // Fetch local running models
   try {
-    console.log(`[${new Date().toISOString()}] Fetching local running models from ${LOCAL_OLLAMA_HOST}`);
-    const localResponse = await fetch(`${LOCAL_OLLAMA_HOST}/api/ps`);
-    if (localResponse.ok) {
-      const localPs: OllamaRunningResponse = await localResponse.json();
-      // Mark local models
-      const localModels = localPs.models.map(model => ({
-        ...model,
-        _source: 'local' // Add metadata
-      }));
-      models.push(...localModels);
-      console.log(`Found ${localModels.length} local running models`);
-    } else {
-      console.warn('Local Ollama not available or returned error:', localResponse.status);
-    }
+    const result = await modelService.getRunningModels();
+    return new Response(JSON.stringify(result), {
+      headers: { 'Content-Type': 'application/json' }
+    });
   } catch (error) {
-    console.warn('Failed to fetch local running models:', (error as Error).message);
+    console.error('Failed to get running models:', error);
+    return new Response(JSON.stringify({ 
+      error: 'Failed to fetch running models',
+      models: [] 
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
-
-  // Fetch remote running models (only if API key is available)
-  if (OLLAMA_API_KEY) {
-    try {
-      console.log(`[${new Date().toISOString()}] Fetching remote running models from ${OLLAMA_HOST}`);
-      const remoteResponse = await fetch(`${OLLAMA_HOST}/api/ps`, {
-        headers: {
-          'Authorization': `Bearer ${OLLAMA_API_KEY}`,
-        },
-      });
-      if (remoteResponse.ok) {
-        const remotePs: OllamaRunningResponse = await remoteResponse.json();
-        // Only include remote models in our list and mark them
-        const filteredRemoteModels = remotePs.models
-          .filter(model => REMOTE_MODELS.includes(model.name))
-          .map(model => ({
-            ...model,
-            _source: 'remote' // Add metadata
-          }));
-        models.push(...filteredRemoteModels);
-        console.log(`Found ${filteredRemoteModels.length} remote running models`);
-      } else {
-        console.warn('Remote Ollama returned error:', remoteResponse.status);
-      }
-    } catch (error) {
-      console.warn('Failed to fetch remote running models:', (error as Error).message);
-    }
-  }
-
-  console.log(`Returning ${models.length} total running models`);
-  
-  return new Response(JSON.stringify({ models }), {
-    headers: { 'Content-Type': 'application/json' }
-  });
 };
 
 // Handle version endpoint
@@ -338,11 +197,7 @@ const server = serve({
     // Handle CORS preflight for both APIs
     if (req.method === 'OPTIONS') {
       return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, DELETE, HEAD, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization, Organization',
-        },
+        headers: createCorsHeaders(),
       });
     }
 
@@ -371,11 +226,7 @@ const server = serve({
       }
 
       if (url.pathname === '/v1/embeddings' && req.method === 'POST') {
-        return createErrorResponse(
-          'Embeddings are not supported by this proxy.',
-          'invalid_request_error',
-          400
-        );
+        return handleEmbeddings(req);
       }
 
       // OpenAI API root
